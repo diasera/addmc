@@ -64,7 +64,7 @@ console.log("=== Rute / identik untuk SEMUA perangkat (anti bocor cache) ===");
 
 console.log();
 console.log("=== Header anti-cache ===");
-for (const jalur of ["/", "/go", "/go2", "/join", "/save", "/servers.dat", "/java", "/both"]) {
+for (const jalur of ["/", "/t1", "/t2", "/t3", "/join", "/save", "/servers.dat", "/java", "/both"]) {
   const r = minta(jalur, UA.android);
   periksa(`${jalur}: no-store`, r.headers["cache-control"], "no-store, no-cache, must-revalidate");
   periksa(`${jalur}: Vary User-Agent`, r.headers["vary"], "User-Agent");
@@ -77,10 +77,10 @@ console.log("=== Isi halaman rantai ===");
   const b = r.body;
   periksa("skema simpan ada", b.includes(SIMPAN), true);
   periksa("skema sambung ada", b.includes(SAMBUNG), true);
-  periksa("iframe dipakai", b.includes("<iframe"), true);
-  periksa("iframe disembunyikan", b.includes("iframe{display:none}"), true);
+  periksa("navigasi tingkat atas dipakai", b.includes("location.href = PERTAMA"), true);
+  periksa("iframe tak dipakai di jalur utama", b.includes("var IFRAME  = false"), true);
   periksa("navigasi location.replace", b.includes("location.replace"), true);
-  periksa("jeda default 700", b.includes("var JEDA    = 700"), true);
+  periksa("jeda default 900", b.includes("var JEDA    = 900"), true);
   periksa("cabang Java aktif di /", b.includes("var CABANG  = true"), true);
   periksa("deteksi di browser (navigator.userAgent)", b.includes("navigator.userAgent"), true);
   periksa("Java dialihkan ke /servers.dat", b.includes('location.replace("/servers.dat")'), true);
@@ -91,18 +91,18 @@ console.log("=== Isi halaman rantai ===");
   periksa("URI ditulis sebagai literal JSON", b.includes('"minecraft://'), true);
 }
 {
-  const b = minta("/go", UA.android).body;
-  periksa("/go: cabang Java dimatikan", b.includes("var CABANG  = false"), true);
-  periksa("/go: simpan dulu", b.indexOf("PERTAMA = " + JSON.stringify(SIMPAN)) >= 0, true);
+  const b = minta("/t2", UA.android).body;
+  periksa("/t2: cabang Java dimatikan", b.includes("var CABANG  = false"), true);
+  periksa("/t2: simpan dulu", b.indexOf("PERTAMA = " + JSON.stringify(SIMPAN)) >= 0, true);
 }
 {
-  const b = minta("/go2", UA.android).body;
-  periksa("/go2: sambung dulu", b.indexOf("PERTAMA = " + JSON.stringify(SAMBUNG)) >= 0, true);
+  const b = minta("/t3", UA.android).body;
+  periksa("/t3: sambung dulu", b.indexOf("PERTAMA = " + JSON.stringify(SAMBUNG)) >= 0, true);
 }
 {
   periksa("?jeda=1500 dihormati", minta("/?jeda=1500", UA.android).body.includes("var JEDA    = 1500"), true);
   periksa("?jeda=99999 dibatasi 5000", minta("/?jeda=99999", UA.android).body.includes("var JEDA    = 5000"), true);
-  periksa("?jeda=abc pakai default", minta("/?jeda=abc", UA.android).body.includes("var JEDA    = 700"), true);
+  periksa("?jeda=abc pakai default 900", minta("/?jeda=abc", UA.android).body.includes("var JEDA    = 900"), true);
 }
 
 console.log();

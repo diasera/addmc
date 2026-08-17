@@ -17,8 +17,9 @@ Minecraft terbuka, server tersimpan permanen di tab Servers
 | Rute | Perilaku |
 |---|---|
 | `/` | **Satu respons untuk semua perangkat.** Bedrock: simpan server + langsung masuk dunia. Java: browser mengalihkan ke `/servers.dat`. |
-| `/go` | Paksa rantai Bedrock, tanpa cabang Java. |
-| `/go2` | Urutan dibalik: sambung dulu, simpan sesudahnya. |
+| `/t1` | Uji: langkah simpan lewat iframe — **terbukti gagal menyimpan**. |
+| `/t2` | Uji: simpan lalu masuk, keduanya navigasi tingkat atas (sama dengan `/`). |
+| `/t3` | Uji: urutan dibalik — masuk dulu, simpan sesudahnya. |
 | `/join` | Hanya sambung langsung — terbukti bekerja di perangkat nyata. |
 | `/save` | Hanya simpan ke daftar server — terbukti bekerja. |
 | `/both` | Dua argumen dalam satu URI — **terbukti gagal**, disimpan untuk rujukan. |
@@ -27,7 +28,7 @@ Minecraft terbuka, server tersimpan permanen di tab Servers
 
 Jalur tak dikenal dialihkan ke `/`.
 
-Jeda antar-skema dapat disetel: `?jeda=1200` (default 700 ms, maksimum 5000).
+Jeda antar-skema dapat disetel: `?jeda=1500` (default 900 ms, maksimum 5000).
 Naikkan bila perangkat lambat dan langkah kedua terpotong.
 
 ## Cara `/` bekerja
@@ -38,15 +39,28 @@ tidak mungkin menembakkan dua skema. Menggabungkan `addExternalServer` dan
 pertama saja.
 
 Solusinya halaman perantara tanpa tampilan (latar gelap, tanpa teks, tanpa
-tombol):
+tombol) yang melakukan **dua navigasi tingkat atas** berurutan:
 
-1. Skema **simpan** ditembakkan lewat `<iframe>` tersembunyi. Iframe tidak
-   mengambil alih navigasi halaman, jadi langkah berikutnya masih bisa jalan.
-2. Setelah 700 ms, `location.replace()` menembakkan skema **sambung**.
+1. `location.href = minecraft://?addExternalServer=...` → server tersimpan.
+2. Setelah 900 ms, `location.href = minecraft://connect?...` → pemain masuk dunia.
 
-Hasilnya server tersimpan di daftar sekaligus pemain masuk dunia. Kalau browser
-memblokir skema kustom di iframe, langkah 2 tetap jalan sehingga pemain tetap
-masuk server — hanya penyimpanannya yang terlewat.
+Navigasi ke skema kustom tidak membongkar halaman: aplikasi terbuka di depan,
+halaman tetap hidup di belakang, jadi langkah kedua masih bisa jalan.
+
+Langkah kedua dilindungi dua pemicu: timer 900 ms, dan event
+`visibilitychange` saat pemain kembali ke browser. Penjaga `sudah` memastikan
+langkah itu hanya berjalan sekali. Ini mengatasi pembatasan timer latar
+belakang di Android dan iOS.
+
+### Mengapa bukan iframe
+
+Versi sebelumnya menembakkan langkah 1 lewat `<iframe>` tersembunyi, dengan
+alasan iframe tidak mengambil alih navigasi. Diuji di perangkat nyata:
+**pemain masuk server tetapi server tidak tersimpan.** Browser mobile
+memblokir skema kustom di dalam iframe secara diam-diam — tidak ada error,
+hanya tidak terjadi apa-apa.
+
+Rute `/t1` mempertahankan perilaku iframe itu untuk perbandingan.
 
 ## Mengapa deteksi perangkat ada di browser, bukan di server
 
@@ -156,8 +170,11 @@ Microsoft, terdokumentasi di Microsoft Learn. Terverifikasi di perangkat nyata.
 terverifikasi masuk dunia tanpa perantara.
 
 **Dua argumen dalam satu URI: TIDAK bekerja.** Diuji di perangkat nyata —
-Minecraft memproses argumen pertama saja dan mengabaikan sisanya. Karena itu
-rute `/` memakai halaman perantara dua langkah, bukan satu URI gabungan.
+Minecraft memproses argumen pertama saja dan mengabaikan sisanya.
+
+**Skema kustom di dalam `<iframe>`: TIDAK bekerja.** Diuji di perangkat nyata —
+pemain masuk server tetapi server tidak tersimpan. Browser mobile memblokirnya
+tanpa pesan error. Hanya navigasi tingkat atas yang bisa dipercaya.
 
 **Java tidak punya skema URI.** Tidak ada cara satu klik yang resmi. Pemain Java
 menerima `servers.dat` (88 byte) untuk ditaruh di folder `.minecraft`.

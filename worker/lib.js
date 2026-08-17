@@ -5,12 +5,22 @@
  * setiap named export di file utama sebagai entrypoint — export nilai biasa
  * (string/objek) di sana membuat runtime menolak start.
  *
- * PENTING — pelajaran dari kejadian nyata:
- * Rute "/" dulu memilih respons berdasarkan User-Agent di sisi server. CDN
- * (Vercel Edge) menyimpan varian pertama yang lewat, lalu menyajikannya ke semua
- * perangkat. Akibatnya pemain Android menerima unduhan servers.dat milik
- * desktop. Sekarang "/" SELALU mengembalikan satu respons HTML yang sama, dan
- * keputusan Bedrock/Java dilakukan di browser. Satu varian = mustahil tertukar.
+ * CATATAN HASIL UJI PERANGKAT NYATA (jangan diulang salahnya):
+ *
+ * 1. Satu URI gabungan `connect?...&addExternalServer=...` GAGAL.
+ *    Minecraft memproses argumen pertama saja.
+ *
+ * 2. Percabangan Bedrock/Java di SISI SERVER lewat header User-Agent GAGAL.
+ *    CDN menyimpan satu varian per URL lalu menyajikannya ke semua perangkat,
+ *    sehingga pemain Android menerima unduhan servers.dat. Sekarang rute "/"
+ *    selalu satu respons HTML identik; percabangan terjadi di browser.
+ *
+ * 3. Menembakkan skema lewat <iframe> GAGAL menyimpan server. Browser mobile
+ *    memblokir skema kustom di dalam iframe. Yang terbukti bekerja hanyalah
+ *    NAVIGASI TINGKAT ATAS (location.href / redirect 302):
+ *      - `?addExternalServer=` lewat navigasi -> server tersimpan
+ *      - `connect?serverUrl=`  lewat navigasi -> pemain masuk dunia
+ *    Karena itu kedua langkah kini memakai navigasi tingkat atas berurutan.
  */
 
 "use strict";
@@ -34,8 +44,7 @@ export function buatLink(cfg = CFG) {
   const sambung =
     `minecraft://connect?serverUrl=${encodeURIComponent(cfg.host)}` +
     `&serverPort=${cfg.portBedrock}`;
-  // Gabungan dua argumen dalam satu URI. Terbukti TIDAK bekerja pada perangkat
-  // nyata (Minecraft memproses argumen pertama saja) — disimpan untuk rujukan.
+  // Terbukti GAGAL di perangkat nyata — disimpan hanya untuk rujukan.
   const keduanya =
     `minecraft://connect?serverUrl=${encodeURIComponent(cfg.host)}` +
     `&serverPort=${cfg.portBedrock}` +
@@ -43,18 +52,17 @@ export function buatLink(cfg = CFG) {
   return { simpan, sambung, keduanya };
 }
 
-/** Kenali jenis perangkat dari User-Agent. Hanya dipakai rute non-"/" . */
+/** Kenali jenis perangkat dari User-Agent. Tidak dipakai rute "/". */
 export function kenaliPerangkat(ua = "") {
   const iOS = /iPad|iPhone|iPod/i.test(ua);
   const android = /Android/i.test(ua);
   const windows = /Windows NT/i.test(ua);
   const mac = /Macintosh/i.test(ua) && !iOS;
-  // Bedrock tersedia di Android, iOS, dan Windows. Desktop lain dianggap Java.
   const bedrock = iOS || android || windows;
   return { iOS, android, windows, mac, bedrock, java: !bedrock };
 }
 
-/** Header anti-cache dipakai semua respons yang bisa berbeda per perangkat. */
+/** Header anti-cache untuk semua respons yang bisa berbeda per perangkat. */
 const TANPA_CACHE = {
   "Cache-Control": "no-store, no-cache, must-revalidate",
   Vary: "User-Agent",
@@ -84,24 +92,23 @@ function kirimServersDat() {
 }
 
 /**
- * Halaman perantara tak terlihat.
+ * Halaman perantara tak terlihat: dua NAVIGASI TINGKAT ATAS berurutan.
  *
- * Bedrock: menembakkan dua skema berurutan supaya server tersimpan DAN pemain
- * langsung masuk dunia. Satu respons HTTP hanya bisa memuat satu Location, dan
- * menggabungkan `addExternalServer` + `connect` dalam satu URI terbukti gagal.
- * Karena itu skema pertama ditembakkan lewat iframe tersembunyi — iframe tidak
- * mengambil alih halaman, jadi navigasi kedua masih bisa dijalankan.
+ * Navigasi ke skema kustom tidak membongkar halaman di browser mobile —
+ * aplikasi terbuka, halaman tetap hidup di belakang. Jadi langkah kedua masih
+ * bisa dijalankan. Iframe tidak dipakai lagi karena diblokir.
  *
- * Java (desktop non-Windows): halaman langsung memicu unduhan servers.dat.
+ * Langkah kedua ditembakkan dua kali: sekali lewat timer, dan sekali lagi saat
+ * halaman kembali terlihat (pemain balik ke browser). Ini mengatasi pembatasan
+ * timer latar belakang di Android/iOS.
  *
- * Tidak ada elemen yang terlihat: latar gelap, tanpa teks, tanpa tombol.
- *
- * @param {string} pertama URI yang ditembakkan lewat iframe
- * @param {string} kedua   URI untuk navigasi utama
- * @param {number} jeda    milidetik antara keduanya
- * @param {boolean} cabangJava true = deteksi Java di browser lalu unduh servers.dat
+ * @param {string} pertama URI langkah pertama
+ * @param {string} kedua   URI langkah kedua
+ * @param {number} jeda    milidetik antar langkah
+ * @param {boolean} cabangJava true = desktop non-Windows dialihkan ke servers.dat
+ * @param {boolean} pakaiIframe true = langkah pertama lewat iframe (mode uji)
  */
-function halamanRantai(pertama, kedua, jeda = 700, cabangJava = true) {
+function halamanRantai(pertama, kedua, jeda = 900, cabangJava = true, pakaiIframe = false) {
   const html = `<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -117,9 +124,10 @@ function halamanRantai(pertama, kedua, jeda = 700, cabangJava = true) {
   var KEDUA   = ${JSON.stringify(kedua)};
   var JEDA    = ${jeda};
   var CABANG  = ${cabangJava ? "true" : "false"};
+  var IFRAME  = ${pakaiIframe ? "true" : "false"};
 
-  // Keputusan platform dilakukan DI BROWSER, bukan di server, supaya CDN tidak
-  // bisa menyajikan varian perangkat yang salah.
+  // Keputusan platform di BROWSER, bukan server, supaya CDN tidak bisa
+  // menyajikan varian perangkat yang salah.
   var ua = navigator.userAgent || "";
   var iOS = /iPad|iPhone|iPod/i.test(ua) ||
             (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -128,21 +136,34 @@ function halamanRantai(pertama, kedua, jeda = 700, cabangJava = true) {
   var bedrock = iOS || android || windows;
 
   if (CABANG && !bedrock) {
-    // Desktop non-Windows: pemain Java. Minecraft Java tidak punya skema URI,
-    // jadi langsung unduh daftar server.
+    // Minecraft Java tidak punya skema URI: kirim daftar server sebagai file.
     location.replace("/servers.dat");
     return;
   }
 
-  // Langkah 1: simpan server lewat iframe (tidak menavigasi halaman).
-  try { document.getElementById("f").src = PERTAMA; }
-  catch (e) { /* sebagian browser menolak skema kustom di iframe */ }
+  // Langkah 1. Navigasi tingkat atas: satu-satunya cara yang terbukti bekerja.
+  if (IFRAME) {
+    try { document.getElementById("f").src = PERTAMA; } catch (e) {}
+  } else {
+    location.href = PERTAMA;
+  }
 
-  // Langkah 2: sambungkan ke server lewat navigasi utama.
-  setTimeout(function(){ location.replace(KEDUA); }, JEDA);
+  // Langkah 2, ditembakkan sekali saja lewat dua pemicu berbeda.
+  var sudah = false;
+  function langkahDua() {
+    if (sudah) return;
+    sudah = true;
+    location.href = KEDUA;
+  }
 
-  // Bila iframe diblokir, langkah 2 tetap jalan: pemain masuk server, hanya
-  // penyimpanan daftar yang terlewat. Tidak ada instruksi yang perlu dibaca.
+  // Pemicu A: timer biasa.
+  setTimeout(langkahDua, JEDA);
+
+  // Pemicu B: saat halaman kembali terlihat. Timer latar belakang dibatasi
+  // Android/iOS, jadi ini jaring pengaman bila pemicu A terlambat.
+  document.addEventListener("visibilitychange", function(){
+    if (!document.hidden) setTimeout(langkahDua, 250);
+  });
 })();
 </script>
 </body></html>`;
@@ -160,13 +181,13 @@ function halamanRantai(pertama, kedua, jeda = 700, cabangJava = true) {
 /**
  * Penanganan permintaan.
  *
- *   /            Satu respons untuk semua perangkat. Bedrock: simpan + langsung
- *                masuk. Java: browser mengalihkan ke /servers.dat.
- *   /go          Paksa rantai Bedrock, tanpa cabang Java.
- *   /go2         Urutan dibalik: sambung dulu, simpan sesudahnya.
- *   /join        Hanya sambung langsung (terbukti bekerja).
- *   /save        Hanya simpan ke daftar server (terbukti bekerja).
- *   /both        Dua argumen satu URI — terbukti gagal, disimpan untuk rujukan.
+ *   /            Simpan lalu masuk, dua navigasi tingkat atas. Java -> servers.dat.
+ *   /t1          Uji: simpan lewat iframe (terbukti gagal menyimpan).
+ *   /t2          Uji: simpan -> masuk, keduanya navigasi (sama dengan /).
+ *   /t3          Uji: masuk -> simpan, urutan dibalik.
+ *   /join        Hanya masuk. Terbukti bekerja.
+ *   /save        Hanya simpan. Terbukti bekerja.
+ *   /both        Dua argumen satu URI. Terbukti gagal, disimpan untuk rujukan.
  *   /servers.dat File untuk pemain Java.
  *   /java        Paksa jalur Java.
  */
@@ -174,10 +195,10 @@ export function tangani(request) {
   const url = new URL(request.url);
   const jalur = url.pathname.replace(/\/+$/, "") || "/";
   const link = buatLink(CFG);
-  // Jeda dapat disetel lewat ?jeda=1200 untuk menguji perangkat lambat.
+  // Jeda dapat disetel: ?jeda=1500 untuk perangkat lambat.
   const jeda = Math.min(
     5000,
-    Math.max(0, parseInt(url.searchParams.get("jeda") || "700", 10) || 700)
+    Math.max(0, parseInt(url.searchParams.get("jeda") || "900", 10) || 900)
   );
 
   switch (jalur) {
@@ -194,15 +215,18 @@ export function tangani(request) {
     case "/both":
       return alihkan(link.keduanya);
 
-    case "/go":
-      return halamanRantai(link.simpan, link.sambung, jeda, false);
+    case "/t1":
+      return halamanRantai(link.simpan, link.sambung, jeda, false, true);
 
-    case "/go2":
-      return halamanRantai(link.sambung, link.simpan, jeda, false);
+    case "/t2":
+      return halamanRantai(link.simpan, link.sambung, jeda, false, false);
+
+    case "/t3":
+      return halamanRantai(link.sambung, link.simpan, jeda, false, false);
 
     case "/":
       // Satu varian untuk semua perangkat; percabangan terjadi di browser.
-      return halamanRantai(link.simpan, link.sambung, jeda, true);
+      return halamanRantai(link.simpan, link.sambung, jeda, true, false);
 
     default:
       return alihkan("/");

@@ -67,7 +67,7 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
   console.log();
 
   console.log("=== Header anti-cache ===");
-  for (const jalur of ["/", "/go", "/go2", "/join", "/save", "/servers.dat", "/java", "/both"]) {
+  for (const jalur of ["/", "/t1", "/t2", "/t3", "/join", "/save", "/servers.dat", "/java", "/both"]) {
     const r = minta(jalur, UA.android);
     periksa(`${jalur}: no-store`, r.headers.get("cache-control"),
       "no-store, no-cache, must-revalidate");
@@ -79,7 +79,7 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
   {
     const b = await minta("/", UA.android).text();
     periksa("dua skema ada", b.includes(SIMPAN) && b.includes(SAMBUNG), true);
-    periksa("iframe tersembunyi", b.includes("iframe{display:none}"), true);
+    periksa("langkah 2 pakai navigasi", b.includes("location.href = KEDUA"), true);
     periksa("location.replace dipakai", b.includes("location.replace"), true);
     periksa("cabang Java aktif di /", b.includes("var CABANG  = true"), true);
     periksa("deteksi di browser", b.includes("navigator.userAgent"), true);
@@ -89,21 +89,21 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
     periksa("noindex", b.includes('name="robots" content="noindex"'), true);
   }
   {
-    const b = await minta("/go", UA.android).text();
-    periksa("/go: cabang Java mati", b.includes("var CABANG  = false"), true);
-    periksa("/go: simpan dulu", b.indexOf("PERTAMA = " + JSON.stringify(SIMPAN)) >= 0, true);
+    const b = await minta("/t2", UA.android).text();
+    periksa("/t2: cabang Java mati", b.includes("var CABANG  = false"), true);
+    periksa("/t2: simpan dulu", b.indexOf("PERTAMA = " + JSON.stringify(SIMPAN)) >= 0, true);
   }
   {
-    const b = await minta("/go2", UA.android).text();
-    periksa("/go2: sambung dulu", b.indexOf("PERTAMA = " + JSON.stringify(SAMBUNG)) >= 0, true);
+    const b = await minta("/t3", UA.android).text();
+    periksa("/t3: sambung dulu", b.indexOf("PERTAMA = " + JSON.stringify(SAMBUNG)) >= 0, true);
   }
   {
     periksa("?jeda=1500 dihormati",
       (await minta("/?jeda=1500", UA.android).text()).includes("var JEDA    = 1500"), true);
     periksa("?jeda=99999 dibatasi 5000",
       (await minta("/?jeda=99999", UA.android).text()).includes("var JEDA    = 5000"), true);
-    periksa("?jeda=abc pakai default",
-      (await minta("/?jeda=abc", UA.android).text()).includes("var JEDA    = 700"), true);
+    periksa("?jeda=abc pakai default 900",
+      (await minta("/?jeda=abc", UA.android).text()).includes("var JEDA    = 900"), true);
   }
   console.log();
 
