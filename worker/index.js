@@ -1,6 +1,5 @@
 /**
  * Titik masuk Cloudflare Worker untuk add.konohaserver.id.
- *
  * Hanya satu default export — Workers menolak start bila file utama
  * mengekspor nilai non-fungsi. Semua logika ada di worker/lib.js.
  */

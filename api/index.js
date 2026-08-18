@@ -2,11 +2,17 @@
  * Titik masuk Vercel (Node.js serverless function) untuk add.konohaserver.id.
  * Logika sama dengan Worker Cloudflare, hanya beda API request/response.
  *
- * CATATAN HASIL UJI PERANGKAT NYATA:
- * 1. URI gabungan `connect?...&addExternalServer=...` gagal — argumen pertama saja.
- * 2. Percabangan User-Agent di server gagal — CDN menyajikan varian salah.
- * 3. Skema kustom lewat <iframe> gagal menyimpan — browser mobile memblokirnya.
- *    Hanya navigasi tingkat atas (location.href) yang bekerja.
+ * FAKTA HASIL UJI PERANGKAT NYATA:
+ *  1. addExternalServer lewat navigasi -> TERSIMPAN (terbukti).
+ *  2. connect lewat navigasi -> MASUK DUNIA (terbukti).
+ *  3. Dua argumen satu URI -> gagal (argumen pertama saja).
+ *  4. Skema kustom di <iframe> -> gagal (diblokir senyap).
+ *  5. Dua navigasi 900 ms -> langkah kedua gagal (Chrome kebelakang,
+ *     Android larang startActivity dari background).
+ *
+ * Strategi v5: langkah kedua ditembakkan 150 ms setelah langkah pertama,
+ * selagi browser masih di depan. Jaring pengaman visibilitychange bila
+ * pemain kembali ke browser.
  */
 
 "use strict";
@@ -36,27 +42,21 @@ function buatLink(cfg) {
   };
 }
 
-/**
- * Halaman perantara tak terlihat: dua navigasi tingkat atas berurutan.
- * Iframe tidak dipakai lagi karena browser mobile memblokir skema kustom di sana.
- */
-function halamanRantai(pertama, kedua, jeda, cabangJava, pakaiIframe) {
+function halamanRantai(langkah1, langkah2, jeda, cabangJava) {
   return `<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>KONOHA Network</title>
-<style>html,body{margin:0;height:100%;background:#0b0d10}iframe{display:none}</style>
-</head><body>
-<iframe id="f" referrerpolicy="no-referrer"></iframe>
+<style>html,body{margin:0;height:100%;background:#0b0d10}</style>
 <script>
 (function(){
   "use strict";
-  var PERTAMA = ${JSON.stringify(pertama)};
-  var KEDUA   = ${JSON.stringify(kedua)};
-  var JEDA    = ${jeda};
-  var CABANG  = ${cabangJava ? "true" : "false"};
-  var IFRAME  = ${pakaiIframe ? "true" : "false"};
+  var L1 = ${JSON.stringify(langkah1)};
+  var L2 = ${JSON.stringify(langkah2)};
+  var JEDA = ${jeda};
+  var CABANG = ${cabangJava ? "true" : "false"};
 
   var ua = navigator.userAgent || "";
   var iOS = /iPad|iPhone|iPod/i.test(ua) ||
@@ -70,34 +70,29 @@ function halamanRantai(pertama, kedua, jeda, cabangJava, pakaiIframe) {
     return;
   }
 
-  if (IFRAME) {
-    try { document.getElementById("f").src = PERTAMA; } catch (e) {}
-  } else {
-    location.href = PERTAMA;
-  }
-
   var sudah = false;
   function langkahDua() {
     if (sudah) return;
     sudah = true;
-    location.href = KEDUA;
+    location.href = L2;
   }
 
+  location.href = L1;
   setTimeout(langkahDua, JEDA);
 
   document.addEventListener("visibilitychange", function(){
-    if (!document.hidden) setTimeout(langkahDua, 250);
+    if (!document.hidden) setTimeout(langkahDua, 200);
   });
 })();
 </script>
-</body></html>`;
+</head><body></body></html>`;
 }
 
 module.exports = function handler(req, res) {
   const potong = (req.url || "/").split("?");
   const jalur = potong[0].replace(/\/+$/, "") || "/";
   const kueri = new URLSearchParams(potong[1] || "");
-  const jeda = Math.min(5000, Math.max(0, parseInt(kueri.get("jeda") || "900", 10) || 900));
+  const jeda = Math.min(5000, Math.max(0, parseInt(kueri.get("jeda") || "150", 10) || 150));
   const link = buatLink(CFG);
 
   function tanpaCache() {
@@ -122,33 +117,29 @@ module.exports = function handler(req, res) {
     res.end(biner);
   }
 
-  function kirimRantai(pertama, kedua, cabangJava, pakaiIframe) {
+  function kirimRantai(langkah1, langkah2, cabangJava) {
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     tanpaCache();
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.end(halamanRantai(pertama, kedua, jeda, cabangJava, pakaiIframe));
+    res.end(halamanRantai(langkah1, langkah2, jeda, cabangJava));
   }
 
   switch (jalur) {
     case "/servers.dat":
     case "/java":
       return kirimServersDat();
-    case "/join":
-      return alihkan(link.sambung);
     case "/save":
       return alihkan(link.simpan);
+    case "/join":
+      return alihkan(link.sambung);
     case "/both":
       return alihkan(link.keduanya);
-    case "/t1":
-      return kirimRantai(link.simpan, link.sambung, false, true);
-    case "/t2":
-      return kirimRantai(link.simpan, link.sambung, false, false);
-    case "/t3":
-      return kirimRantai(link.sambung, link.simpan, false, false);
+    case "/r":
+      return kirimRantai(link.sambung, link.simpan, false);
     case "/":
-      return kirimRantai(link.simpan, link.sambung, true, false);
+      return kirimRantai(link.simpan, link.sambung, true);
     default:
       return alihkan("/");
   }

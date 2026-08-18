@@ -1,26 +1,26 @@
 /**
- * Inti logika pengalih add.konohaserver.id.
+ * Inti logika add.konohaserver.id — dibangun ulang dari nol (v5).
  *
- * Dipisah dari titik masuk Worker karena Cloudflare Workers memperlakukan
- * setiap named export di file utama sebagai entrypoint — export nilai biasa
- * (string/objek) di sana membuat runtime menolak start.
+ * FAKTA HASIL UJI PERANGKAT NYATA (dasar desain ini):
  *
- * CATATAN HASIL UJI PERANGKAT NYATA (jangan diulang salahnya):
+ *  1. `minecraft://?addExternalServer=Nama|host:port` lewat navigasi tingkat
+ *     atas  -> server TERSIMPAN. TERBUKTI.
+ *  2. `minecraft://connect?serverUrl=host&serverPort=19132` lewat navigasi
+ *     tingkat atas -> pemain MASUK DUNIA. TERBUKTI.
+ *  3. Kedua argumen digabung dalam satu URI -> GAGAL (argumen pertama saja).
+ *  4. Skema kustom di dalam <iframe> -> GAGAL (diblokir senyap).
+ *  5. Dua navigasi berjarak 900 ms -> langkah pertama jalan, langkah kedua
+ *     GAGAL. Penyebab: Minecraft sudah mengambil layar, Chrome kebelakang,
+ *     Android melarang startActivity dari proses latar belakang.
  *
- * 1. Satu URI gabungan `connect?...&addExternalServer=...` GAGAL.
- *    Minecraft memproses argumen pertama saja.
+ * STRATEGI BARU (v5):
+ *  Tembakkan langkah kedua saat Chrome MASIH DI DEPAN — sekitar 150 ms setelah
+ *  langkah pertama, sebelum aktivitas Minecraft sempat tampil. Kedua intent
+ *  terkirim ke Android berurutan; Minecraft memprosesnya satu per satu.
  *
- * 2. Percabangan Bedrock/Java di SISI SERVER lewat header User-Agent GAGAL.
- *    CDN menyimpan satu varian per URL lalu menyajikannya ke semua perangkat,
- *    sehingga pemain Android menerima unduhan servers.dat. Sekarang rute "/"
- *    selalu satu respons HTML identik; percabangan terjadi di browser.
- *
- * 3. Menembakkan skema lewat <iframe> GAGAL menyimpan server. Browser mobile
- *    memblokir skema kustom di dalam iframe. Yang terbukti bekerja hanyalah
- *    NAVIGASI TINGKAT ATAS (location.href / redirect 302):
- *      - `?addExternalServer=` lewat navigasi -> server tersimpan
- *      - `connect?serverUrl=`  lewat navigasi -> pemain masuk dunia
- *    Karena itu kedua langkah kini memakai navigasi tingkat atas berurutan.
+ *  Jaring pengaman: bila langkah kedua terlewat, event `visibilitychange`
+ *  menembakkannya lagi begitu pemain kembali ke browser (browser di depan lagi).
+ *  Penjaga `sudah` mencegah dobel.
  */
 
 "use strict";
@@ -44,7 +44,6 @@ export function buatLink(cfg = CFG) {
   const sambung =
     `minecraft://connect?serverUrl=${encodeURIComponent(cfg.host)}` +
     `&serverPort=${cfg.portBedrock}`;
-  // Terbukti GAGAL di perangkat nyata — disimpan hanya untuk rujukan.
   const keduanya =
     `minecraft://connect?serverUrl=${encodeURIComponent(cfg.host)}` +
     `&serverPort=${cfg.portBedrock}` +
@@ -62,7 +61,7 @@ export function kenaliPerangkat(ua = "") {
   return { iOS, android, windows, mac, bedrock, java: !bedrock };
 }
 
-/** Header anti-cache untuk semua respons yang bisa berbeda per perangkat. */
+/** Anti-cache: semua respons bisa berbeda per perangkat/kueri. */
 const TANPA_CACHE = {
   "Cache-Control": "no-store, no-cache, must-revalidate",
   Vary: "User-Agent",
@@ -92,39 +91,35 @@ function kirimServersDat() {
 }
 
 /**
- * Halaman perantara tak terlihat: dua NAVIGASI TINGKAT ATAS berurutan.
+ * Halaman perantara tanpa tampilan: dua navigasi tingkat atas berurutan.
  *
- * Navigasi ke skema kustom tidak membongkar halaman di browser mobile —
- * aplikasi terbuka, halaman tetap hidup di belakang. Jadi langkah kedua masih
- * bisa dijalankan. Iframe tidak dipakai lagi karena diblokir.
+ * - Langkah 1 ditembakkan SEGERA saat skrip diparsing (bukan setelah load
+ *   event), memakai `location.href` (bukan replace) supaya halaman tetap ada
+ *   di riwayat — back dari Minecraft mengembalikan pemain ke sini, dan jaring
+ *   pengaman bisa menembakkan langkah 2.
+ * - Langkah 2 ditembakkan setelah `jeda` ms, plus jaring pengaman
+ *   `visibilitychange`. Penjaga `sudah` memastikan hanya sekali.
  *
- * Langkah kedua ditembakkan dua kali: sekali lewat timer, dan sekali lagi saat
- * halaman kembali terlihat (pemain balik ke browser). Ini mengatasi pembatasan
- * timer latar belakang di Android/iOS.
- *
- * @param {string} pertama URI langkah pertama
- * @param {string} kedua   URI langkah kedua
- * @param {number} jeda    milidetik antar langkah
+ * @param {string} langkah1 URI pertama
+ * @param {string} langkah2 URI kedua
+ * @param {number} jeda     milidetik antar langkah (default 150)
  * @param {boolean} cabangJava true = desktop non-Windows dialihkan ke servers.dat
- * @param {boolean} pakaiIframe true = langkah pertama lewat iframe (mode uji)
  */
-function halamanRantai(pertama, kedua, jeda = 900, cabangJava = true, pakaiIframe = false) {
+function halamanRantai(langkah1, langkah2, jeda = 150, cabangJava = true) {
   const html = `<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>KONOHA Network</title>
-<style>html,body{margin:0;height:100%;background:#0b0d10}iframe{display:none}</style>
-</head><body>
-<iframe id="f" referrerpolicy="no-referrer"></iframe>
+<style>html,body{margin:0;height:100%;background:#0b0d10}</style>
 <script>
 (function(){
   "use strict";
-  var PERTAMA = ${JSON.stringify(pertama)};
-  var KEDUA   = ${JSON.stringify(kedua)};
-  var JEDA    = ${jeda};
-  var CABANG  = ${cabangJava ? "true" : "false"};
-  var IFRAME  = ${pakaiIframe ? "true" : "false"};
+  var L1 = ${JSON.stringify(langkah1)};
+  var L2 = ${JSON.stringify(langkah2)};
+  var JEDA = ${jeda};
+  var CABANG = ${cabangJava ? "true" : "false"};
 
   // Keputusan platform di BROWSER, bukan server, supaya CDN tidak bisa
   // menyajikan varian perangkat yang salah.
@@ -141,32 +136,27 @@ function halamanRantai(pertama, kedua, jeda = 900, cabangJava = true, pakaiIfram
     return;
   }
 
-  // Langkah 1. Navigasi tingkat atas: satu-satunya cara yang terbukti bekerja.
-  if (IFRAME) {
-    try { document.getElementById("f").src = PERTAMA; } catch (e) {}
-  } else {
-    location.href = PERTAMA;
-  }
-
-  // Langkah 2, ditembakkan sekali saja lewat dua pemicu berbeda.
   var sudah = false;
   function langkahDua() {
     if (sudah) return;
     sudah = true;
-    location.href = KEDUA;
+    location.href = L2;
   }
 
-  // Pemicu A: timer biasa.
+  // Langkah 1: SEGERA, selagi browser di depan.
+  location.href = L1;
+
+  // Langkah 2: selagi Chrome masih di depan (sebelum Minecraft tampil).
   setTimeout(langkahDua, JEDA);
 
-  // Pemicu B: saat halaman kembali terlihat. Timer latar belakang dibatasi
-  // Android/iOS, jadi ini jaring pengaman bila pemicu A terlambat.
+  // Jaring pengaman: pemain kembali ke browser -> browser di depan lagi ->
+  // langkah 2 boleh ditembakkan.
   document.addEventListener("visibilitychange", function(){
-    if (!document.hidden) setTimeout(langkahDua, 250);
+    if (!document.hidden) setTimeout(langkahDua, 200);
   });
 })();
 </script>
-</body></html>`;
+</head><body></body></html>`;
   return new Response(html, {
     status: 200,
     headers: {
@@ -181,13 +171,11 @@ function halamanRantai(pertama, kedua, jeda = 900, cabangJava = true, pakaiIfram
 /**
  * Penanganan permintaan.
  *
- *   /            Simpan lalu masuk, dua navigasi tingkat atas. Java -> servers.dat.
- *   /t1          Uji: simpan lewat iframe (terbukti gagal menyimpan).
- *   /t2          Uji: simpan -> masuk, keduanya navigasi (sama dengan /).
- *   /t3          Uji: masuk -> simpan, urutan dibalik.
- *   /join        Hanya masuk. Terbukti bekerja.
- *   /save        Hanya simpan. Terbukti bekerja.
- *   /both        Dua argumen satu URI. Terbukti gagal, disimpan untuk rujukan.
+ *   /            SIMPAN lalu MASUK (jeda default 150 ms, bisa ?jeda=N).
+ *   /r           Urutan dibalik: MASUK lalu SIMPAN.
+ *   /save        Hanya simpan (302). Terbukti bekerja.
+ *   /join        Hanya masuk (302). Terbukti bekerja.
+ *   /both        Dua argumen satu URI (302). Terbukti gagal, untuk rujukan.
  *   /servers.dat File untuk pemain Java.
  *   /java        Paksa jalur Java.
  */
@@ -195,10 +183,10 @@ export function tangani(request) {
   const url = new URL(request.url);
   const jalur = url.pathname.replace(/\/+$/, "") || "/";
   const link = buatLink(CFG);
-  // Jeda dapat disetel: ?jeda=1500 untuk perangkat lambat.
+  // Jeda dapat disetel: ?jeda=50 untuk perangkat cepat, ?jeda=400 bila lambat.
   const jeda = Math.min(
     5000,
-    Math.max(0, parseInt(url.searchParams.get("jeda") || "900", 10) || 900)
+    Math.max(0, parseInt(url.searchParams.get("jeda") || "150", 10) || 150)
   );
 
   switch (jalur) {
@@ -206,27 +194,21 @@ export function tangani(request) {
     case "/java":
       return kirimServersDat();
 
-    case "/join":
-      return alihkan(link.sambung);
-
     case "/save":
       return alihkan(link.simpan);
+
+    case "/join":
+      return alihkan(link.sambung);
 
     case "/both":
       return alihkan(link.keduanya);
 
-    case "/t1":
-      return halamanRantai(link.simpan, link.sambung, jeda, false, true);
-
-    case "/t2":
-      return halamanRantai(link.simpan, link.sambung, jeda, false, false);
-
-    case "/t3":
-      return halamanRantai(link.sambung, link.simpan, jeda, false, false);
+    case "/r":
+      return halamanRantai(link.sambung, link.simpan, jeda, false);
 
     case "/":
       // Satu varian untuk semua perangkat; percabangan terjadi di browser.
-      return halamanRantai(link.simpan, link.sambung, jeda, true, false);
+      return halamanRantai(link.simpan, link.sambung, jeda, true);
 
     default:
       return alihkan("/");

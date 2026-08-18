@@ -1,6 +1,6 @@
 name = "konoha-add"
 main = "worker/index.js"
-compatibility_date = "2026-08-01"
+compatibility_date = "2026-08-18"
 
 # Setelah deploy pertama, tambahkan domain di dashboard Cloudflare:
 #   Workers & Pages -> konoha-add -> Settings -> Domains & Routes -> Add Custom Domain

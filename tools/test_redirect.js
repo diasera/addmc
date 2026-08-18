@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 /**
- * Uji logika Worker Cloudflare (worker/lib.js lewat salinan CommonJS).
- * Memakai Request/Response bawaan Node 18+.
+ * Uji logika worker/lib.js (lewat salinan CommonJS) dengan Request/Response
+ * bawaan Node 18+.
  *
- * Fokus utama: rute "/" harus mengembalikan respons IDENTIK untuk semua
- * User-Agent, supaya CDN tidak bisa menyajikan varian perangkat yang salah.
+ * Fokus v5:
+ *  - rute "/" identik untuk semua User-Agent (anti bocor cache CDN)
+ *  - langkah 1 ditembakkan SEGERA (location.href = L1 sebelum timer)
+ *  - jeda default 150 ms
+ *  - jaring pengaman visibilitychange ada
+ *  - tidak ada iframe
  */
 "use strict";
 
-const { tangani, buatLink, kenaliPerangkat, CFG, SERVERS_DAT_B64 } = require("./worker_cjs.js");
+const { tangani, buatLink, CFG, SERVERS_DAT_B64 } = require("./worker_cjs.js");
 
 let gagal = 0;
 function periksa(nama, dapat, harap) {
@@ -49,8 +53,6 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
   console.log("=== Format link ===");
   periksa("skema simpan sesuai dokumentasi Microsoft", link.simpan, SIMPAN);
   periksa("skema sambung sesuai dokumentasi Microsoft", link.sambung, SAMBUNG);
-  periksa("pemisah | literal", link.simpan.includes("|"), true);
-  periksa("spasi nama jadi %20", link.simpan.includes("KONOHA%20Network"), true);
   console.log();
 
   console.log("=== Rute / identik untuk SEMUA perangkat (anti bocor cache) ===");
@@ -67,7 +69,7 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
   console.log();
 
   console.log("=== Header anti-cache ===");
-  for (const jalur of ["/", "/t1", "/t2", "/t3", "/join", "/save", "/servers.dat", "/java", "/both"]) {
+  for (const jalur of ["/", "/r", "/save", "/join", "/both", "/servers.dat", "/java"]) {
     const r = minta(jalur, UA.android);
     periksa(`${jalur}: no-store`, r.headers.get("cache-control"),
       "no-store, no-cache, must-revalidate");
@@ -75,44 +77,47 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
   }
   console.log();
 
-  console.log("=== Isi halaman rantai ===");
+  console.log("=== Isi halaman rantai v5 ===");
   {
     const b = await minta("/", UA.android).text();
     periksa("dua skema ada", b.includes(SIMPAN) && b.includes(SAMBUNG), true);
-    periksa("langkah 2 pakai navigasi", b.includes("location.href = KEDUA"), true);
-    periksa("location.replace dipakai", b.includes("location.replace"), true);
-    periksa("cabang Java aktif di /", b.includes("var CABANG  = true"), true);
+    periksa("TIDAK ada iframe", b.includes("<iframe"), false);
+    periksa("langkah 1 navigasi segera", b.includes("location.href = L1"), true);
+    periksa("langkah 2 navigasi", b.includes("location.href = L2"), true);
+    periksa("jeda default 150", b.includes("var JEDA = 150"), true);
+    periksa("jaring pengaman visibilitychange", b.includes("visibilitychange"), true);
+    periksa("penjaga anti-dobel", b.includes("if (sudah) return;"), true);
+    periksa("cabang Java aktif di /", b.includes("var CABANG = true"), true);
     periksa("deteksi di browser", b.includes("navigator.userAgent"), true);
-    periksa("Java dialihkan ke /servers.dat", b.includes('location.replace("/servers.dat")'), true);
     periksa("iPad UA-desktop tertangani", b.includes("maxTouchPoints"), true);
+    periksa("Java dialihkan ke /servers.dat", b.includes('location.replace("/servers.dat")'), true);
     periksa("tanpa tombol", b.includes("<button"), false);
+    periksa("tanpa tautan", b.includes("<a "), false);
     periksa("noindex", b.includes('name="robots" content="noindex"'), true);
+    periksa("referrer disembunyikan", b.includes('name="referrer" content="no-referrer"'), true);
+    periksa("URI ditulis literal JSON", b.includes('"minecraft://'), true);
   }
   {
-    const b = await minta("/t2", UA.android).text();
-    periksa("/t2: cabang Java mati", b.includes("var CABANG  = false"), true);
-    periksa("/t2: simpan dulu", b.indexOf("PERTAMA = " + JSON.stringify(SIMPAN)) >= 0, true);
+    const b = await minta("/r", UA.android).text();
+    periksa("/r: cabang Java mati", b.includes("var CABANG = false"), true);
+    periksa("/r: urutan dibalik", b.indexOf("L1 = " + JSON.stringify(SAMBUNG)) >= 0, true);
   }
   {
-    const b = await minta("/t3", UA.android).text();
-    periksa("/t3: sambung dulu", b.indexOf("PERTAMA = " + JSON.stringify(SAMBUNG)) >= 0, true);
-  }
-  {
-    periksa("?jeda=1500 dihormati",
-      (await minta("/?jeda=1500", UA.android).text()).includes("var JEDA    = 1500"), true);
+    periksa("?jeda=300 dihormati",
+      (await minta("/?jeda=300", UA.android).text()).includes("var JEDA = 300"), true);
     periksa("?jeda=99999 dibatasi 5000",
-      (await minta("/?jeda=99999", UA.android).text()).includes("var JEDA    = 5000"), true);
-    periksa("?jeda=abc pakai default 900",
-      (await minta("/?jeda=abc", UA.android).text()).includes("var JEDA    = 900"), true);
+      (await minta("/?jeda=99999", UA.android).text()).includes("var JEDA = 5000"), true);
+    periksa("?jeda=abc pakai default 150",
+      (await minta("/?jeda=abc", UA.android).text()).includes("var JEDA = 150"), true);
   }
   console.log();
 
   console.log("=== Rute tunggal ===");
+  periksa("/save -> 302 simpan", minta("/save", UA.android).headers.get("location"), SIMPAN);
   periksa("/join -> 302 sambung", minta("/join", UA.android).headers.get("location"), SAMBUNG);
-  periksa("/save -> 302 simpan", minta("/save", UA.iphone).headers.get("location"), SIMPAN);
   {
     const l = minta("/both", UA.android).headers.get("location");
-    periksa("/both punya dua argumen",
+    periksa("/both punya dua argumen (rujukan)",
       l.includes("serverUrl=") && l.includes("addExternalServer="), true);
   }
   periksa("jalur asing -> /", minta("/entah", UA.android).headers.get("location"), "/");
@@ -145,14 +150,6 @@ const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=1
     periksa("host baru ada", biner.includes(Buffer.from("play.konohaserver.id")), true);
     periksa("nama server ada", biner.includes(Buffer.from("KONOHA Network")), true);
     periksa("tidak ada host lama", biner.includes(Buffer.from("konohanetwork")), false);
-  }
-  console.log();
-
-  console.log("=== kenaliPerangkat (dipakai rujukan, bukan rute /) ===");
-  const HARAP = { android: "BEDROCK", iphone: "BEDROCK", windows: "BEDROCK", linux: "JAVA", mac: "JAVA" };
-  for (const [nama, harap] of Object.entries(HARAP)) {
-    const d = kenaliPerangkat(UA[nama]);
-    periksa(`${nama} -> ${harap}`, d.bedrock ? "BEDROCK" : "JAVA", harap);
   }
 
   console.log();

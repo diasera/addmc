@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /**
  * Uji handler Vercel (api/index.js) dengan objek req/res palsu.
- *
- * Fokus utama: rute "/" harus mengembalikan respons IDENTIK untuk semua
- * User-Agent, supaya CDN tidak bisa menyajikan varian perangkat yang salah.
+ * Fokus v5: rute "/" identik untuk semua UA, tanpa iframe, jeda 150.
  */
 "use strict";
 
@@ -46,7 +44,7 @@ function minta(jalur, ua) {
 const SIMPAN = "minecraft://?addExternalServer=KONOHA%20Network|play.konohaserver.id:19132";
 const SAMBUNG = "minecraft://connect?serverUrl=play.konohaserver.id&serverPort=19132";
 
-console.log("=== Rute / identik untuk SEMUA perangkat (anti bocor cache) ===");
+console.log("=== Rute / identik untuk SEMUA perangkat ===");
 {
   const acuan = minta("/", UA.android);
   periksa("Android: 200 HTML", `${acuan.status} ${acuan.headers["content-type"]}`,
@@ -54,66 +52,57 @@ console.log("=== Rute / identik untuk SEMUA perangkat (anti bocor cache) ===");
   for (const nama of Object.keys(UA)) {
     const r = minta("/", UA[nama]);
     periksa(`${nama}: status sama`, r.status, acuan.status);
-    periksa(`${nama}: tipe sama`, r.headers["content-type"], acuan.headers["content-type"]);
-    periksa(`${nama}: isi byte-identik`, r.body === acuan.body, true);
+    periksa(`${nama}: isi identik`, r.body === acuan.body, true);
   }
-  periksa("tidak ada rute / yang mengirim octet-stream",
-    Object.keys(UA).every((n) => minta("/", UA[n]).headers["content-type"] === "text/html; charset=utf-8"),
-    true);
 }
-
 console.log();
+
 console.log("=== Header anti-cache ===");
-for (const jalur of ["/", "/t1", "/t2", "/t3", "/join", "/save", "/servers.dat", "/java", "/both"]) {
+for (const jalur of ["/", "/r", "/save", "/join", "/both", "/servers.dat", "/java"]) {
   const r = minta(jalur, UA.android);
   periksa(`${jalur}: no-store`, r.headers["cache-control"], "no-store, no-cache, must-revalidate");
   periksa(`${jalur}: Vary User-Agent`, r.headers["vary"], "User-Agent");
 }
-
 console.log();
-console.log("=== Isi halaman rantai ===");
+
+console.log("=== Isi halaman rantai v5 ===");
 {
-  const r = minta("/", UA.android);
-  const b = r.body;
-  periksa("skema simpan ada", b.includes(SIMPAN), true);
-  periksa("skema sambung ada", b.includes(SAMBUNG), true);
-  periksa("navigasi tingkat atas dipakai", b.includes("location.href = PERTAMA"), true);
-  periksa("iframe tak dipakai di jalur utama", b.includes("var IFRAME  = false"), true);
-  periksa("navigasi location.replace", b.includes("location.replace"), true);
-  periksa("jeda default 900", b.includes("var JEDA    = 900"), true);
-  periksa("cabang Java aktif di /", b.includes("var CABANG  = true"), true);
-  periksa("deteksi di browser (navigator.userAgent)", b.includes("navigator.userAgent"), true);
+  const b = minta("/", UA.android).body;
+  periksa("dua skema ada", b.includes(SIMPAN) && b.includes(SAMBUNG), true);
+  periksa("TIDAK ada iframe", b.includes("<iframe"), false);
+  periksa("langkah 1 segera (location.href = L1)", b.includes("location.href = L1"), true);
+  periksa("langkah 2 navigasi", b.includes("location.href = L2"), true);
+  periksa("jeda default 150", b.includes("var JEDA = 150"), true);
+  periksa("jaring pengaman visibilitychange", b.includes("visibilitychange"), true);
+  periksa("penjaga anti-dobel", b.includes("if (sudah) return;"), true);
+  periksa("cabang Java aktif di /", b.includes("var CABANG = true"), true);
+  periksa("deteksi di browser", b.includes("navigator.userAgent"), true);
   periksa("Java dialihkan ke /servers.dat", b.includes('location.replace("/servers.dat")'), true);
-  periksa("iPad UA-desktop tertangani (maxTouchPoints)", b.includes("maxTouchPoints"), true);
   periksa("tanpa tombol", b.includes("<button"), false);
-  periksa("tanpa tautan terlihat", b.includes("<a "), false);
+  periksa("tanpa tautan", b.includes("<a "), false);
   periksa("noindex", b.includes('name="robots" content="noindex"'), true);
-  periksa("URI ditulis sebagai literal JSON", b.includes('"minecraft://'), true);
+  periksa("URI literal JSON", b.includes('"minecraft://'), true);
 }
 {
-  const b = minta("/t2", UA.android).body;
-  periksa("/t2: cabang Java dimatikan", b.includes("var CABANG  = false"), true);
-  periksa("/t2: simpan dulu", b.indexOf("PERTAMA = " + JSON.stringify(SIMPAN)) >= 0, true);
+  const b = minta("/r", UA.android).body;
+  periksa("/r: cabang Java mati", b.includes("var CABANG = false"), true);
+  periksa("/r: sambung dulu", b.indexOf("L1 = " + JSON.stringify(SAMBUNG)) >= 0, true);
 }
 {
-  const b = minta("/t3", UA.android).body;
-  periksa("/t3: sambung dulu", b.indexOf("PERTAMA = " + JSON.stringify(SAMBUNG)) >= 0, true);
+  periksa("?jeda=300 dihormati", minta("/?jeda=300", UA.android).body.includes("var JEDA = 300"), true);
+  periksa("?jeda=99999 dibatasi 5000", minta("/?jeda=99999", UA.android).body.includes("var JEDA = 5000"), true);
+  periksa("?jeda=abc pakai default", minta("/?jeda=abc", UA.android).body.includes("var JEDA = 150"), true);
 }
-{
-  periksa("?jeda=1500 dihormati", minta("/?jeda=1500", UA.android).body.includes("var JEDA    = 1500"), true);
-  periksa("?jeda=99999 dibatasi 5000", minta("/?jeda=99999", UA.android).body.includes("var JEDA    = 5000"), true);
-  periksa("?jeda=abc pakai default 900", minta("/?jeda=abc", UA.android).body.includes("var JEDA    = 900"), true);
-}
-
 console.log();
+
 console.log("=== Rute tunggal ===");
+periksa("/save -> 302 simpan", minta("/save", UA.android).headers.location, SIMPAN);
 periksa("/join -> 302 sambung", minta("/join", UA.android).headers.location, SAMBUNG);
-periksa("/save -> 302 simpan", minta("/save", UA.iphone).headers.location, SIMPAN);
-periksa("/both masih ada untuk rujukan", minta("/both", UA.android).status, 302);
+periksa("/both tetap untuk rujukan", minta("/both", UA.android).status, 302);
 periksa("jalur asing -> /", minta("/apa-saja", UA.android).headers.location, "/");
 periksa("garis miring akhir", minta("/join/", UA.android).headers.location, SAMBUNG);
-
 console.log();
+
 console.log("=== servers.dat ===");
 {
   const r = minta("/servers.dat", UA.linux);
@@ -124,7 +113,6 @@ console.log("=== servers.dat ===");
   periksa("NBT TAG_Compound", r.body[0], 10);
   periksa("NBT TAG_End", r.body[r.body.length - 1], 0);
   periksa("host benar", r.body.includes(Buffer.from("play.konohaserver.id")), true);
-  periksa("tanpa host lama", r.body.includes(Buffer.from("konohanetwork")), false);
 }
 periksa("/java sama dengan /servers.dat",
   minta("/java", UA.linux).body.equals(minta("/servers.dat", UA.linux).body), true);

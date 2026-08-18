@@ -1,209 +1,117 @@
-# add.konohaserver.id — pengalih langsung ke aplikasi Minecraft
+# add.konohaserver.id — pengalih langsung ke aplikasi Minecraft (v5)
 
-Tanpa halaman web. Pemain klik link, browser mengembalikan **HTTP 302** ke skema
-`minecraft://`, dan aplikasi Minecraft langsung terbuka. Tidak ada tombol, tidak
-ada tampilan, tidak ada yang perlu dibaca pemain.
-
-```
-https://add.konohaserver.id
-        ↓ HTTP 302
-minecraft://?addExternalServer=KONOHA%20Network|play.konohaserver.id:19132
-        ↓
-Minecraft terbuka, server tersimpan permanen di tab Servers
-```
+Tanpa halaman web. Pemain klik link, dua skema `minecraft://` ditembakkan
+berurutan: server tersimpan di daftar, lalu pemain langsung masuk dunia.
 
 ## Rute
 
 | Rute | Perilaku |
 |---|---|
-| `/` | **Satu respons untuk semua perangkat.** Bedrock: simpan server + langsung masuk dunia. Java: browser mengalihkan ke `/servers.dat`. |
-| `/t1` | Uji: langkah simpan lewat iframe — **terbukti gagal menyimpan**. |
-| `/t2` | Uji: simpan lalu masuk, keduanya navigasi tingkat atas (sama dengan `/`). |
-| `/t3` | Uji: urutan dibalik — masuk dulu, simpan sesudahnya. |
-| `/join` | Hanya sambung langsung — terbukti bekerja di perangkat nyata. |
-| `/save` | Hanya simpan ke daftar server — terbukti bekerja. |
-| `/both` | Dua argumen dalam satu URI — **terbukti gagal**, disimpan untuk rujukan. |
+| `/` | **Simpan lalu masuk.** Satu respons HTML identik untuk semua perangkat. Bedrock: dua navigasi tingkat atas berurutan (jeda 150 ms). Java: browser mengalihkan ke `/servers.dat`. |
+| `/r` | Urutan dibalik: masuk dulu, simpan sesudahnya. |
+| `/save` | Hanya simpan (302). Terbukti bekerja. |
+| `/join` | Hanya masuk (302). Terbukti bekerja. |
+| `/both` | Dua argumen dalam satu URI (302). Terbukti gagal, disimpan untuk rujukan. |
 | `/servers.dat` | File daftar server untuk Java. |
-| `/java` | Paksa jalur Java dari perangkat apa pun. |
+| `/java` | Paksa jalur Java. |
 
-Jalur tak dikenal dialihkan ke `/`.
+Jalur tak dikenal dialihkan ke `/`. Jeda antar-skema dapat disetel:
+`?jeda=300` (default 150 ms, maksimum 5000).
 
-Jeda antar-skema dapat disetel: `?jeda=1500` (default 900 ms, maksimum 5000).
-Naikkan bila perangkat lambat dan langkah kedua terpotong.
-
-## Cara `/` bekerja
-
-Satu respons HTTP hanya bisa memuat satu header `Location`, jadi satu redirect
-tidak mungkin menembakkan dua skema. Menggabungkan `addExternalServer` dan
-`connect` dalam satu URI juga terbukti gagal — Minecraft memproses argumen
-pertama saja.
-
-Solusinya halaman perantara tanpa tampilan (latar gelap, tanpa teks, tanpa
-tombol) yang melakukan **dua navigasi tingkat atas** berurutan:
-
-1. `location.href = minecraft://?addExternalServer=...` → server tersimpan.
-2. Setelah 900 ms, `location.href = minecraft://connect?...` → pemain masuk dunia.
-
-Navigasi ke skema kustom tidak membongkar halaman: aplikasi terbuka di depan,
-halaman tetap hidup di belakang, jadi langkah kedua masih bisa jalan.
-
-Langkah kedua dilindungi dua pemicu: timer 900 ms, dan event
-`visibilitychange` saat pemain kembali ke browser. Penjaga `sudah` memastikan
-langkah itu hanya berjalan sekali. Ini mengatasi pembatasan timer latar
-belakang di Android dan iOS.
-
-### Mengapa bukan iframe
-
-Versi sebelumnya menembakkan langkah 1 lewat `<iframe>` tersembunyi, dengan
-alasan iframe tidak mengambil alih navigasi. Diuji di perangkat nyata:
-**pemain masuk server tetapi server tidak tersimpan.** Browser mobile
-memblokir skema kustom di dalam iframe secara diam-diam — tidak ada error,
-hanya tidak terjadi apa-apa.
-
-Rute `/t1` mempertahankan perilaku iframe itu untuk perbandingan.
-
-## Mengapa deteksi perangkat ada di browser, bukan di server
-
-Versi awal memilih respons di sisi server berdasarkan header `User-Agent`:
-Bedrock dapat redirect, desktop dapat `servers.dat`. Ini **gagal di produksi** —
-pemain Android menerima unduhan `servers.dat`.
-
-Penyebabnya CDN. Bukti dari header respons Vercel:
-
-```
-x-vercel-cache: HIT
-age: 45
-content-type: application/octet-stream
-```
-
-Permintaan pertama yang lewat kebetulan datang dari desktop, jadi edge menyimpan
-varian biner itu untuk URL `/`, lalu menyajikannya ke **semua** perangkat
-berikutnya termasuk ponsel.
-
-Perbaikannya dua lapis:
-
-1. Rute `/` sekarang selalu mengembalikan **satu respons HTML yang identik**
-   untuk setiap perangkat — diverifikasi md5 sama di 7 User-Agent berbeda.
-   Percabangan Bedrock/Java terjadi di browser lewat `navigator.userAgent`.
-2. Semua respons memakai `Cache-Control: no-store, no-cache, must-revalidate`
-   dan `Vary: User-Agent`.
-
-Karena hanya ada satu varian, tidak ada lagi yang bisa tertukar. Pemain Java
-tetap dapat file-nya: browser mendeteksi desktop lalu mengalihkan ke
-`/servers.dat`.
-
-## Data server (sudah diverifikasi live)
+## Data server (diverifikasi live)
 
 | Item | Nilai |
 |---|---|
 | Host | `play.konohaserver.id` → `139.162.24.73` |
-| Java | TCP `25565` — terverifikasi terbuka |
-| Bedrock | UDP `19132` — menjawab `MCPE;KONOHA Network \| Survival` |
+| Java | TCP `25565` |
+| Bedrock | UDP `19132` |
 
-## Deploy ke Cloudflare Workers
+## Riwayat hasil uji perangkat nyata (dasar desain v5)
+
+| Percobaan | Hasil |
+|---|---|
+| `addExternalServer` lewat navigasi (302) | server TERSIMPAN |
+| `connect?serverUrl&serverPort` lewat navigasi (302) | MASUK DUNIA |
+| `connect?...&addExternalServer=...` satu URI | GAGAL — argumen pertama saja |
+| skema kustom di `<iframe>` | GAGAL — diblokir senyap |
+| dua navigasi berjarak 900 ms | langkah 1 jalan, langkah 2 GAGAL — Minecraft sudah mengambil layar, Chrome kebelakang, Android larang startActivity dari background |
+| dua navigasi berjarak 150 ms (v5) | sedang diuji |
+
+## Cara `/` bekerja (v5)
 
 ```
-cd konoha-add
-npx wrangler deploy
+klik https://add.konohaserver.id
+  ↓ HTTP 200 — HTML minimal, tanpa tampilan
+skrip langsung jalan:
+  1. location.href = minecraft://?addExternalServer=KONOHA%20Network|play.konohaserver.id:19132
+  2. setTimeout 150 ms → location.href = minecraft://connect?serverUrl=play.konohaserver.id&serverPort=19132
+  ↓
+server tersimpan + pemain masuk dunia
 ```
 
-Lalu di dashboard: **Workers & Pages → konoha-add → Settings → Domains & Routes
-→ Add Custom Domain** → masukkan `add.konohaserver.id`.
+Kunci desain: langkah kedua ditembakkan **selagi browser masih di depan** —
+sebelum aktivitas Minecraft sempat tampil. Setelah Minecraft mengambil layar,
+Chrome dianggap latar belakang dan Android menolak `startActivity` darinya.
 
-Kalau zona `konohaserver.id` sudah ada di akun Cloudflare yang sama, buka
-komentar bagian `routes` di `wrangler.toml` dan cukup jalankan `npx wrangler deploy`.
+Jaring pengaman: event `visibilitychange` menembakkan langkah kedua lagi saat
+pemain kembali ke browser. Penjaga `sudah` mencegah dobel.
+
+## Mengapa percabangan Bedrock/Java di browser, bukan server
+
+Versi awal memilih respons di server berdasarkan header `User-Agent`. Gagal di
+produksi: CDN (Vercel Edge) menyimpan satu varian per URL dan menyajikannya ke
+semua perangkat — pemain Android menerima unduhan `servers.dat`.
+
+Sekarang rute `/` selalu mengembalikan satu HTML identik (diverifikasi md5 sama
+di banyak User-Agent). Keputusan platform dibuat browser lewat
+`navigator.userAgent`. Semua respons memakai
+`Cache-Control: no-store, no-cache, must-revalidate` + `Vary: User-Agent`.
 
 ## Deploy ke Vercel
 
 ```
-cd konoha-add
+cd konoha-link
 vercel --prod
 ```
 
-Lalu **Settings → Domains** → tambah `add.konohaserver.id`. DNS yang dibutuhkan:
+Lalu Settings → Domains → `add.konohaserver.id`, DNS:
+`CNAME add cname.vercel-dns.com`
+
+## Deploy ke Cloudflare Workers
 
 ```
-Type: CNAME    Name: add    Value: cname.vercel-dns.com
+cd konoha-link
+npx wrangler deploy
 ```
 
-`vercel.json` sudah mengarahkan semua jalur ke `api/index.js`.
+Lalu Workers & Pages → konoha-add → Settings → Domains & Routes → Add Custom
+Domain → `add.konohaserver.id`.
 
-## Uji sebelum deploy
-
-```
-node tools/test_redirect.js   # logika Worker — 24 uji
-node tools/test_vercel.js     # handler Vercel — 16 uji
-npx wrangler dev --local      # runtime Cloudflare asli di localhost:8787
-```
-
-Contoh uji manual dengan User-Agent Android:
+## Uji lokal
 
 ```
-curl -sI -A "Mozilla/5.0 (Linux; Android 14) Mobile" http://127.0.0.1:8787/
+node tools/test_redirect.js   # logika Worker
+node tools/test_vercel.js     # handler Vercel
+npx wrangler dev --local      # runtime Cloudflare asli di :8787
 ```
-
-Harus mengembalikan `302` dengan header `Location: minecraft://?addExternalServer=...`.
-
-## Cara mengubah host atau nama server
-
-Ubah `CFG` di **tiga** tempat agar konsisten:
-
-- `worker/lib.js` (Cloudflare)
-- `api/index.js` (Vercel)
-- `tools/make_servers_dat.py` (untuk membuat ulang `servers.dat`)
-
-Setelah mengubah host, buat ulang `servers.dat` dan perbarui base64-nya:
-
-```
-python3 tools/make_servers_dat.py
-python3 -c "import base64;print(base64.b64encode(open('public/servers.dat','rb').read()).decode())"
-```
-
-Tempel hasilnya ke `SERVERS_DAT_B64` di `worker/lib.js` dan `api/index.js`.
 
 ## Batasan yang jujur
 
-**Menyimpan server: bekerja satu klik.** `addExternalServer` adalah skema resmi
-Microsoft, terdokumentasi di Microsoft Learn. Terverifikasi di perangkat nyata.
+- **Java tidak punya skema URI.** Pemain Java menerima `servers.dat` (88 byte)
+  untuk ditaruh di folder `.minecraft`.
+- **iOS** memblokir skema non-http di browser dalam aplikasi (Instagram,
+  TikTok). Link harus dibuka di Safari.
+- **Konsol** (Xbox, PlayStation, Switch) tidak mendukung deep link maupun
+  server pihak ketiga.
+- **Satu klik = dua intent.** Selalu ada kemungkinan kecil OS/browser
+  menolak intent kedua. Jaring pengaman `visibilitychange` menembakkan ulang
+  saat pemain kembali ke browser.
 
-**Sambung langsung: bekerja satu klik.** `connect?serverUrl=...&serverPort=...`
-terverifikasi masuk dunia tanpa perantara.
+## Mengubah host atau nama server
 
-**Dua argumen dalam satu URI: TIDAK bekerja.** Diuji di perangkat nyata —
-Minecraft memproses argumen pertama saja dan mengabaikan sisanya.
+Ubah `CFG` di `worker/lib.js` dan `api/index.js`, lalu buat ulang base64
+`servers.dat`:
 
-**Skema kustom di dalam `<iframe>`: TIDAK bekerja.** Diuji di perangkat nyata —
-pemain masuk server tetapi server tidak tersimpan. Browser mobile memblokirnya
-tanpa pesan error. Hanya navigasi tingkat atas yang bisa dipercaya.
-
-**Java tidak punya skema URI.** Tidak ada cara satu klik yang resmi. Pemain Java
-menerima `servers.dat` (88 byte) untuk ditaruh di folder `.minecraft`.
-Peringatkan pemain: jangan timpa file lama kalau daftar server mereka sudah berisi.
-
-**iOS** memblokir skema non-http di browser dalam aplikasi (Instagram, TikTok).
-Link harus dibuka di Safari.
-
-**Konsol** (Xbox, PlayStation, Switch) tidak mendukung deep link maupun server
-pihak ketiga. Pemain konsol butuh BedrockConnect atau perubahan DNS.
-
-## Berkas
-
-| Berkas | Fungsi |
-|---|---|
-| `worker/index.js` | Titik masuk Cloudflare Worker (hanya default export) |
-| `worker/lib.js` | Logika pengalih: bangun link, kenali perangkat, rute |
-| `api/index.js` | Titik masuk Vercel, logika sama |
-| `wrangler.toml` | Konfigurasi Cloudflare |
-| `vercel.json` | Rewrite semua jalur ke fungsi |
-| `public/servers.dat` | File Java 88 byte, NBT tak terkompresi |
-| `tools/make_servers_dat.py` | Generator `servers.dat` + parser verifikasi |
-| `tools/test_redirect.js` | 24 uji logika Worker |
-| `tools/test_vercel.js` | 16 uji handler Vercel |
-| `tools/worker_cjs.js` | Salinan CommonJS `lib.js` untuk diuji Node |
-
-## Catatan teknis
-
-File utama Worker hanya boleh mengekspor `default`. Mengekspor nilai biasa
-(string, objek) dari file utama membuat runtime menolak start dengan
-`Incorrect type for map entry ... not of type 'function or ExportedHandler'`.
-Karena itu logika dipisah ke `worker/lib.js`.
+```
+python3 tools/make_servers_dat.py
+```
